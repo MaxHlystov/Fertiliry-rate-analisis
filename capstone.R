@@ -90,10 +90,10 @@ mod1_string = "model {
   sig = sqrt(1.0/prec)
   
   precTau0 ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
-  tau1 = sqrt(1.0/precTau0)
+  tau0 = sqrt(1.0/precTau0)
 
   precTau1 ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
-  tau0 = sqrt(1.0/precTau1)
+  tau1 = sqrt(1.0/precTau1)
   
   omega ~ ddirich(c(1.0, 1.0, 1.0, 1.0, 1.0))
 } "
@@ -215,5 +215,104 @@ sum(resid^2)
 # Intervals of highest posterior density for each parameter
 HPDinterval(mod2_csim)
 
-#############################################################################################
-# Prediction
+
+# Compare model 1 and 2
+dic.samples(mod1, n.iter=1e3)
+dic.samples(mod2, n.iter=1e3)
+
+
+# Compute probability that the coefficient given
+# has sign needed
+probOfSign <- function(mod_csim, coeffIdx, sig){
+  if(sig > 0){
+    return(mean(mod_csim[, coeffIdx] > 0))
+  }
+  return(mean(mod_csim[, coeffIdx] < 0))
+}
+
+probOfSign(mod2_csim, 2, -1) # P(b1 < 0)
+probOfSign(mod2_csim, 3, -1) # P(b2 < 0)
+probOfSign(mod2_csim, 4, -1) # P(b3 < 0)
+probOfSign(mod2_csim, 5, 1)  # P(b4 > 0)
+probOfSign(mod2_csim, 6, 1)  # P(b5 > 0)
+probOfSign(mod2_csim, 7, 1)  # P(b6 > 0)
+probOfSign(mod2_csim, 8, -1) # P(b7 < 0)
+probOfSign(mod2_csim, 9, -1) # P(b8 < 0)
+
+meanProbOfFirstAssumption <- mean(c(0.759, 0.8513867, 0.04618667, 0.30872,
+       0.9998867, 1, 0.7594933, 0))
+
+########################################################################################
+# Model 3. Fit the bayesian model with all coefficients relay on classes of countries
+
+mod3_string = "model {
+  for (i in 1:length(y)) {
+    y[i] ~ dnorm(a[i], prec)
+    a[i] = b[1, k[i]] + b[2, k[i]]*population[i] + b[3, k[i]]*NY_GDP_MKTP_CD[i] + b[4, k[i]]*NY_GDP_PCAP_CD[i] + b[5, k[i]]*SH_DYN_AIDS_ZS[i] + b[6, k[i]]*SI_POV_DDAY[i] + b[7, k[i]]*SP_DYN_IMRT_IN[i] + b[8, k[i]]*SP_DYN_LE00_IN[i] + b[9, k[i]]*SP_POP_GROW[i]
+    k[i] ~ dcat(omega)
+  }
+  
+  for (j in 1:5) {
+    for(u in 1:9) {
+      b[u, j] ~ dnorm(mu[u, j], precTau[u])
+      mu[u, j] ~ dnorm(0.0, 1.0/10000.0)
+    }
+  }
+
+  for(u in 1:9) {  
+    precTau[u] ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
+    tau[u] = sqrt(1.0/precTau[u])
+  }
+
+  prec ~ dgamma(1.0/2.0, 1.0*1.0/2.0)
+  sig = sqrt(1.0/prec)
+
+  omega ~ ddirich(c(1.0, 1.0, 1.0, 1.0, 1.0))
+} "
+
+
+params3 = c("b", "sig", "tau", "omega", "k")
+
+mod3 = jags.model(textConnection(mod3_string), data=data_jags, n.chains=3)
+update(mod3, 1e4)
+
+mod3_sim = coda.samples(model=mod3,
+                        variable.names=params3,
+                        n.iter=5e4)
+mod3_csim = as.mcmc(do.call(rbind, mod3_sim))
+
+## convergence diagnostics
+summary(mod3_sim)
+par(mar=c(1,1,1,1))
+plot(mod3_sim, ask = T)
+
+autocorr.plot(mod3_sim)
+effectiveSize(mod3_sim)
+raftery.diag(mod3_csim)
+
+# model converge, but k is about 2 for all observations.
+# k parameter dose not have a sense
+means3 <-  colMeans(mod3_csim)
+k_values <- means3[seq(46,568)]
+hist(k_values)
+
+# get coefficients of class k
+getKCoeffs <- function(means, k){
+  means[seq(k*9-8, k*9)]
+}
+
+# compare classical linear regression model
+# and our mixture model
+coeffsMod3 <- getKCoeffs(means3, 2)
+models3Diff <- sum((cCoeffs - coeffsMod3)^2)
+
+# Check residuals
+yhat3 <- predictFR(coeffsMod3, testX)
+
+# Residuals
+resid3 <- testY - yhat3
+plot(testY, resid3)
+qqnorm(resid3)
+
+# Sum of square residuals
+sum(resid3^2)
